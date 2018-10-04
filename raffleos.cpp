@@ -26,12 +26,13 @@ class raffle : public eosio::contract {
  
    public:
      
-      const uint32_t FIVE_MINUTES = 5*60;
+      const uint32_t DAY = 24*60*60;
 
       raffle(account_name self):eosio::contract(self), raffle(_self, _self), games(_self, _self), global_dices(_self, _self),
        accounts(_self, _self)
       {}
 
+      //@abi action
       void createraffle(const account_name owner, 
                         const asset& prize, 
                         uint64_t n_of_tikects,  
@@ -46,97 +47,49 @@ class raffle : public eosio::contract {
 
         require_auth( _self );
 
-
-
-      }
-      //@abi action
-      void offerbet(const asset& bet, const account_name player, const checksum256& commitment) {
-
-         eosio_assert( bet.symbol == CORE_SYMBOL, "only core token allowed" );
-         eosio_assert( bet.is_valid(), "invalid bet" );
-         eosio_assert( bet.amount > 0, "must bet positive quantity" );
-
-         eosio_assert( !has_offer( commitment ), "offer with this commitment already exist" );
-         require_auth( player );
-
-         auto cur_player_itr = accounts.find( player );
-         eosio_assert(cur_player_itr != accounts.end(), "unknown account");
-
-         // Store new offer
-         auto new_offer_itr = offers.emplace(_self, [&](auto& offer){
-            offer.id         = offers.available_primary_key();
-            offer.bet        = bet;
-            offer.owner      = player;
-            offer.commitment = commitment;
-            offer.gameid     = 0;
+        // Store new raffle
+         auto new_raffle_itr = raffles.emplace(_self, [&](auto& offer){
+            raffle.id           = offers.available_primary_key();
+            raffle.owner        = bet;
+            raffle.prize        = player;
+            raffle.n_of_tikects = commitment;
+            raffle.ticket_price =   // calculated 
+            raffle.raffle_desc  = 0;
+            raffle.deadline = eosio::time_point_sec(now() + DAY)
          });
 
-         // Try to find a matching bet
-         auto idx = offers.template get_index<N(bet)>();
-         auto matched_offer_itr = idx.lower_bound( (uint64_t)new_offer_itr->bet.amount );
+      // Create many colored names to raffle list
 
-         if( matched_offer_itr == idx.end()
-            || matched_offer_itr->bet != new_offer_itr->bet
-            || matched_offer_itr->owner == new_offer_itr->owner ) {
 
-            // No matching bet found, update player's account
-            accounts.modify( cur_player_itr, 0, [&](auto& acnt) {
-               eosio_assert( acnt.eos_balance >= bet, "insufficient balance" );
-               acnt.eos_balance -= bet;
-               acnt.open_offers++;
-            });
+      // Broadcast to blockchain a sorted colored name criptografed by actual active key and save txid
 
-         } else {
-            // Create global game counter if not exists
-            auto gdice_itr = global_dices.begin();
-            if( gdice_itr == global_dices.end() ) {
-               gdice_itr = global_dices.emplace(_self, [&](auto& gdice){
-                  gdice.nextgameid=0;
-               });
-            }
+      }
 
-            // Increment global game counter
-            global_dices.modify(gdice_itr, 0, [&](auto& gdice){
-               gdice.nextgameid++;
-            });
 
-            // Create a new game
-            auto game_itr = games.emplace(_self, [&](auto& new_game){
-               new_game.id       = gdice_itr->nextgameid;
-               new_game.bet      = new_offer_itr->bet;
-               new_game.deadline = eosio::time_point_sec(0);
+      //@abi action
+      void buyticket( const account_name from, const asset& quantity ) {
+         
+         eosio_assert( quantity.is_valid(), "invalid quantity" );
+         eosio_assert( quantity.amount > 0, "must deposit positive quantity" );
 
-               new_game.player1.commitment = matched_offer_itr->commitment;
-               memset(&new_game.player1.reveal, 0, sizeof(checksum256));
-
-               new_game.player2.commitment = new_offer_itr->commitment;
-               memset(&new_game.player2.reveal, 0, sizeof(checksum256));
-            });
-
-            // Update player's offers
-            idx.modify(matched_offer_itr, 0, [&](auto& offer){
-               offer.bet.amount = 0;
-               offer.gameid = game_itr->id;
-            });
-
-            offers.modify(new_offer_itr, 0, [&](auto& offer){
-               offer.bet.amount = 0;
-               offer.gameid = game_itr->id;
-            });
-
-            // Update player's accounts
-            accounts.modify( accounts.find( matched_offer_itr->owner ), 0, [&](auto& acnt) {
-               acnt.open_offers--;
-               acnt.open_games++;
-            });
-
-            accounts.modify( cur_player_itr, 0, [&](auto& acnt) {
-               eosio_assert( acnt.eos_balance >= bet, "insufficient balance" );
-               acnt.eos_balance -= bet;
-               acnt.open_games++;
+         auto itr = accounts.find(from);
+         if( itr == accounts.end() ) {
+            itr = accounts.emplace(_self, [&](auto& acnt){
+               acnt.owner = from;
             });
          }
+
+         action(
+            permission_level{ from, N(active) },
+            N(eosio.token), N(transfer),
+            std::make_tuple(from, _self, quantity, std::string("RafflEos.io - Raffle Ticket"))
+         ).send();
+
+         accounts.modify( itr, 0, [&]( auto& acnt ) {
+            acnt.eos_balance += quantity;
+         });
       }
+   
 
       //@abi action
       void canceloffer( const checksum256& commitment ) {
@@ -229,29 +182,7 @@ class raffle : public eosio::contract {
 
       }
 
-      //@abi action
-      void deposit( const account_name from, const asset& quantity ) {
-         
-         eosio_assert( quantity.is_valid(), "invalid quantity" );
-         eosio_assert( quantity.amount > 0, "must deposit positive quantity" );
 
-         auto itr = accounts.find(from);
-         if( itr == accounts.end() ) {
-            itr = accounts.emplace(_self, [&](auto& acnt){
-               acnt.owner = from;
-            });
-         }
-
-         action(
-            permission_level{ from, N(active) },
-            N(eosio.token), N(transfer),
-            std::make_tuple(from, _self, quantity, std::string(""))
-         ).send();
-
-         accounts.modify( itr, 0, [&]( auto& acnt ) {
-            acnt.eos_balance += quantity;
-         });
-      }
 
       //@abi action
       void withdraw( const account_name to, const asset& quantity ) {
@@ -280,28 +211,71 @@ class raffle : public eosio::contract {
       }
 
    private:
-      //@abi table offer i64
-      struct raffle {
+
+          void colorednames( const account_name voucher_issuer, 
+                            const account_name voucher_owner,
+                            uint64_t offerId)
+        {
+            auto id = _voucher.available_primary_key();
+            
+             _voucher.emplace(get_self(), [&](auto &voucher) {
+                voucher.voucherId = id;
+                voucher.offerId = offerId;
+                voucher.voucher_issuer = voucher_issuer;
+                voucher.voucher_owner = voucher_owner;
+                voucher.buy_date = now();
+            });
+            print("Your voucherId is: ");
+            print(id);
+
+        }
+        
+
+      //@abi table raffles i64
+      struct raffles {
          uint64_t          id;
          account_name      owner;
          asset             prize;
          uint64_t          n_of_tikects
          asset             ticket_price
          string            raffle_desc;
-         uint64_t          raffleid = 0;
+         eosio::time_point_sec deadline;
+
 
          uint64_t primary_key()const { return id; }
 
          uint64_t by_prize()const { return (uint64_t)prize.amount; }
 
-         EOSLIB_SERIALIZE( raffle, (id)(owner)(prize)(n_of_tikects)(ticket_price)(raffle_desc)(raffleid) )
+         EOSLIB_SERIALIZE( raffles, (id)(owner)(prize)(n_of_tikects)(ticket_price)(raffle_desc)(raffleid) )
       };
 
-      typedef eosio::multi_index< N(raffle), raffle,
-         indexed_by< N(prize), const_mem_fun<raffle, uint64_t, &raffle::by_prize > >,
-         indexed_by< N(commitment), const_mem_fun<raffle, key256,  &raffle::by_commitment> >
-      > raffle_index;
+      typedef eosio::multi_index< N(raffles), raffles,
+         indexed_by< N(prize), const_mem_fun<raffles, uint64_t, &raffles::by_prize > >,
+         indexed_by< N(ticket_price), const_mem_fun<raffles, key256,  &raffles::by_ticket_price> >
+      > raffles_index;
 
+      //@abi table names i64
+      struct names {
+         uint64_t       id;
+         uint64_t       raffle_id;
+         string         colored_name;
+         account_name   owner;
+
+         uint64_t primary_key()const { return id; }
+
+         EOSLIB_SERIALIZE( game, (id)(bet)(deadline)(player1)(player2) )
+      };
+
+     
+     
+     
+     
+     
+     
+     
+     
+     
+     
       struct player {
          checksum256 commitment;
          checksum256 reveal;
