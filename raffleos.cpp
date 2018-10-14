@@ -32,14 +32,61 @@ class raffle : public eosio::contract
 
   public:
     const uint32_t MINUTE = 60;
+    const uint32_t DAY = 24*60*60;
+    const uint32_t WEEK = 7*24*60*60;
+
 
     // random generator function:
     int raffle_random(int i) { return std::rand() % i; }
 
-    raffle(account_name self) : eosio::contract(self), raffle(_self, _self), games(_self, _self), global_dices(_self, _self),
-                                accounts(_self, _self)
+    raffle(account_name self) : eosio::contract(self), raffle(_self, _self), numbers(_self, _self), accounts(_self, _self)
     {
     }
+
+    //@abi action
+    void startfundraising(const account_name owner,
+                          const asset& prize_goal,
+                          uint64_t n_of_tikects,
+                          const string& prize,
+                          const string& raffle_desc){
+                 
+                   fundraising.deadline = eosio::time_point_sec(now() + WEEK) // Time to close the raffle an reveal the secret
+
+        // create a fundraising for next week
+        // set parameters and goals 
+    }
+
+    void makeinvestiment(const account_name owner, 
+                         uint64_t raffle_id,
+                         const asset& quantity){
+       // receive deposits to found a new raffle
+    }
+
+/*
+    void claimexpired(const uint64_t gameid)
+    {
+
+        auto game_itr = games.find(gameid);
+
+        eosio_assert(game_itr != games.end(), "game not found");
+        eosio_assert(game_itr->deadline != eosio::time_point_sec(0) && eosio::time_point_sec(now()) > game_itr->deadline, "game not expired");
+
+        auto idx = offers.template get_index<N(commitment)>();
+        auto player1_offer = idx.find(offer::get_commitment(game_itr->player1.commitment));
+        auto player2_offer = idx.find(offer::get_commitment(game_itr->player2.commitment));
+
+        if (!is_zero(game_itr->player1.reveal))
+        {
+            eosio_assert(is_zero(game_itr->player2.reveal), "game error");
+            pay_and_clean(*game_itr, *player1_offer, *player2_offer);
+        }
+        else
+        {
+            eosio_assert(is_zero(game_itr->player1.reveal), "game error");
+            pay_and_clean(*game_itr, *player2_offer, *player1_offer);
+        }
+    }
+*/
 
     //@abi action
     void createraffle(const account_name owner,
@@ -54,6 +101,7 @@ class raffle : public eosio::contract
         eosio_assert(prize.amount > 0, "must prize positive quantity");
         eosio_assert(n_of_tikects > 0, "number of tickets must to be a positive quantity");
 
+        // Only raffleos.io can create a new raffle
         require_auth(_self);
 
         rafflestable raffles(_self, _self);
@@ -153,31 +201,31 @@ class raffle : public eosio::contract
         print (winner);
     }
 
-    /*
 
-    void claimexpired(const uint64_t gameid)
-    {
+     //@abi action
+      void deposit( const account_name from, const asset& quantity ) {
+         
+         eosio_assert( quantity.is_valid(), "invalid quantity" );
+         eosio_assert( quantity.amount > 0, "must deposit positive quantity" );
 
-        auto game_itr = games.find(gameid);
+         auto itr = accounts.find(from);
+         if( itr == accounts.end() ) {
+            itr = accounts.emplace(_self, [&](auto& acnt){
+               acnt.owner = from;
+            });
+         }
 
-        eosio_assert(game_itr != games.end(), "game not found");
-        eosio_assert(game_itr->deadline != eosio::time_point_sec(0) && eosio::time_point_sec(now()) > game_itr->deadline, "game not expired");
+         action(
+            permission_level{ from, N(active) },
+            N(eosio.token), N(transfer),
+            std::make_tuple(from, _self, quantity, std::string(""))
+         ).send();
 
-        auto idx = offers.template get_index<N(commitment)>();
-        auto player1_offer = idx.find(offer::get_commitment(game_itr->player1.commitment));
-        auto player2_offer = idx.find(offer::get_commitment(game_itr->player2.commitment));
+         accounts.modify( itr, 0, [&]( auto& acnt ) {
+            acnt.eos_balance += quantity;
+         });
+      }
 
-        if (!is_zero(game_itr->player1.reveal))
-        {
-            eosio_assert(is_zero(game_itr->player2.reveal), "game error");
-            pay_and_clean(*game_itr, *player1_offer, *player2_offer);
-        }
-        else
-        {
-            eosio_assert(is_zero(game_itr->player1.reveal), "game error");
-            pay_and_clean(*game_itr, *player2_offer, *player1_offer);
-        }
-    }
 
     void withdraw(const account_name to, const asset &quantity)
     {
@@ -205,8 +253,26 @@ class raffle : public eosio::contract
             accounts.erase(itr);
         }
     }
-    */
+    
   private:
+
+    //@abi table fundraising i64
+    struct fundraising
+    {
+        uint64_t id;
+        account_name owner;
+        eosio::time_point_sec deadline;
+    }
+
+    //@abi table investors i64
+    struct investor
+    {
+        uint64_t id;
+        uint64_t fundraising_id;
+        account_name investor;
+        asset invested_amount;
+        asset expected_return;
+    }
 
     //@abi table raffles i64
     struct raffles
@@ -245,6 +311,24 @@ class raffle : public eosio::contract
 
     typedef eosio::multi_index<N(numbers), numbers> numberstable;
 
+
+      //@abi table account i64
+      struct account {
+         account( account_name o = account_name() ):owner(o){}
+
+         account_name owner;
+         asset        eos_balance;
+         uint32_t     open_offers = 0;
+         uint32_t     open_games = 0;
+
+         bool is_empty()const { return !( eos_balance.amount | open_offers | open_games ); }
+
+         uint64_t primary_key()const { return owner; }
+
+         EOSLIB_SERIALIZE( account, (owner)(eos_balance)(open_offers)(open_games) )
+      };
+
+      typedef eosio::multi_index< N(account), account> account_index;
 
     raffletable raffles;
     numberstable numbers;
